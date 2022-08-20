@@ -1,0 +1,127 @@
+- Fix annotation errors
+- Remove group annotation from 'token_list' and 'tokens_id', add lemma as event class
+- Add coreference clusters
+- Change annotation format:
+    {
+        (pickle) "source_id": Str, 
+        "DailyDialog_id": Str,
+        "split": Str, # ['train', 'valid', 'test'] split in DailyDialog
+        "dialog_id": Str, # id in each split
+        "dialogue": Str, # "preprocess" in annotation['entry']
+        "events": List, # "with_token_anno" in annotation
+            (pickle) subjects/objects
+        "coreferences": List, # a list of cluster_lists, each cluster_list is a list of tokens_id. Note that the 1st cluster must be S1 cluster and the 2nd must be S2. The S1/S2 might be an empty cluster.
+        "coreferences_tokens": List, # for human readable, each cluster_list is a list of tokens
+        (pickle) "tokensid2corefid": Dict, # {tokens_id: coref_id} (Str:Int)
+        (pickle) "tokensid2tokens": Dict,
+    }
+
+- Change format of "annotation" ("with_token_anno") field:
+
+If two events have the same predicate & subject & object, 
+then they are the same event even the event status (polarity, modality, time) is different.
+Moreover, the event info (eventType) is tied to the predicate and would not change over time.
+The 'frame_name" of the same predicate might be different depends on the context.
+e.g. the frame_name of "tell" could be "Telling" (obj: S2) or "Statement" (obj: S2 is hired.) 
+However, I think the 'frame_name' should be the same for the same predicate, and this problem should be fixed.
+
+Therefore, I split the event fields into three categories: 
+    
+    - "participants" (predicate, subject, object) 
+    - "event_status" (polarity, modality, time, who)
+    - "event_info" (eventType, frame_name)
+
+Note that we drop the 'frame_candidates' from the original annotations.
+
+- Change format of entities list (subjects/objects):
+
+In order to identify the same event regardless of event_status change, we separate the entity and coreference, replace the entities list with the representive entity dict, and add its coreference id to the entity dict.
+
+Criterion of selecting the most representative entity:
+
+    1. The token_id is the nearest to the predicate's tokens_id
+    2. In the case of implicit event where there is no predicate tokens_id, we select the token_id closest to the start token id of that turn.
+    3. Contains "S1" or "S2"
+    4. Has longest tokens
+
+---
+Original = 
+[
+    # events_per_turn:
+    {
+        "checkEvent": Str, # ['hasEvent'/'notEvent']
+        "triples": [
+            # event:
+            {
+                'eventType': Str, # ['explicit'/'implicit']
+                'polarity': Str,  # ['pos'/'neg']
+                'modality': Str,  # ['actual'/'hypothetical']
+                'time': Str or Dict, 
+                'predicate': Dict, 
+                'subject': List, 
+                'object': List, 
+                'frame_name': Str, 
+                'frame_candidates': List,
+                'who': Str, # Only exists in some of the events
+            }, {}, ...
+        ]
+    }, {}, ...
+]
+
+New = 
+[
+    # events_per_turn:
+    [
+        # event:
+        {
+            "participants": {
+                'predicate': Dict, 
+                'subjects': List, # could be removed
+                'objects': List,  # could be removed
+                'subject': Dict,
+                'object': Dict,
+            },
+            "event_status": { 
+                'polarity': Bool, 
+                'modality': Bool, 
+                'time': Str or Dict, 
+                'who': Str, # Only exists in some of the events
+            },
+            "event_info":{
+                'explicit': Bool,
+                'frame_name': Str,
+                'predicate_class': Str,
+            }
+        }, {}, ...
+    ], [], ...
+]
+
+
+subjects =
+[
+    {
+        "tokens": Str,
+        "token_list": List, # list of tokens
+        "group_num": Str,
+        "tokens_id": Str
+    }, {}, ...
+]
+
+subject = {
+    "entity_id": Int, # which is also the index of cluster in the "coreferences" field
+    "tokens": Str,
+    "token_list": List, # list of tokens
+    "group_num": Str,
+    "tokens_id": Str
+}
+if no object: object = {}
+
+
+# Formats of "tokens_id":
+ - "14-15"
+ - "17"
+ - "60(32)" # replace 32 with 60
+ - "6-7(31)" # replace 31 with 6-7
+ - "21(4-5)" # replace 4-5 with 21
+ - "52,54" # not a continuous span, e.g. 782-3-0
+ - "57-59, 83" # not a continuous span, e.g. 84-4-0
